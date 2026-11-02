@@ -56,16 +56,18 @@ func (s *server) addTools(srv *mcp.Server) {
 		Annotations: additive,
 	}, s.create)
 	addTool(srv, &mcp.Tool{
-		Name:        "enable_masked_email",
-		Title:       "Enable masked email",
-		Description: "Enable a masked email address, by id or by address, so its mail is delivered to the inbox again.",
+		Name:  "enable_masked_email",
+		Title: "Enable masked email",
+		Description: "Enable a masked email address, by id or by address, so its mail is delivered to the inbox again. " +
+			"Addresses in the deleted state are refused: restoring one is only possible in the Fastmail app.",
 		Annotations: reversible,
 	}, s.enable)
 	addTool(srv, &mcp.Tool{
 		Name:  "disable_masked_email",
 		Title: "Disable masked email",
 		Description: "Disable a masked email address, by id or by address. Mail sent to it then goes straight to the trash. " +
-			"This is the way to stop an address; it can be undone with enable_masked_email.",
+			"This is the way to stop an address; it can be undone with enable_masked_email. " +
+			"Addresses in the deleted state are refused and stay deleted.",
 		Annotations: reversible,
 	}, s.disable)
 	addTool(srv, &mcp.Tool{
@@ -254,6 +256,9 @@ func (s *server) setState(ctx context.Context, ref refIn, state maskedemail.Stat
 	m, err := s.resolve(ctx, ref)
 	if err != nil {
 		return maskedEmailOut{}, err
+	}
+	if m.State == maskedemail.StateDeleted {
+		return maskedEmailOut{}, errors.New("this masked email is deleted; these tools leave deleted addresses alone, restore it in the Fastmail app if needed")
 	}
 	if m.State == state {
 		return toOut(m), nil

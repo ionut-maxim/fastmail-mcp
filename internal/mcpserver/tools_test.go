@@ -301,7 +301,7 @@ func TestNoDeleteReachable(t *testing.T) {
 	// Exercise every tool, then check nothing sent a destroy or a forbidden state.
 	call(t, cs, "create_masked_email", map[string]any{"forDomain": "example.com", "description": "x"})
 	call(t, cs, "disable_masked_email", map[string]any{"id": "m1"})
-	call(t, cs, "enable_masked_email", map[string]any{"id": "m4"})
+	wantToolError(t, cs, "enable_masked_email", map[string]any{"id": "m4"}, "deleted")
 	call(t, cs, "update_masked_email", map[string]any{"id": "m2", "description": "y"})
 	for _, raw := range f.Sets() {
 		var set struct {
@@ -447,5 +447,20 @@ func TestValidationLimits(t *testing.T) {
 	}
 	if n := len(f.Sets()); n != 1 {
 		t.Errorf("%d creates reached Fastmail, want only the valid one", n)
+	}
+}
+
+func TestDeletedAddressesStayDeleted(t *testing.T) {
+	f := seeded(t)
+	cs := connect(t, newClient(t, f).MaskedEmail)
+	wantToolError(t, cs, "enable_masked_email", map[string]any{"id": "m4"}, "deleted")
+	wantToolError(t, cs, "disable_masked_email", map[string]any{"email": "old.4@example.com"}, "deleted")
+	if f.Item("m4")["state"] != "deleted" || len(f.Sets()) != 0 {
+		t.Errorf("deleted address changed: %v, %d sets", f.Item("m4"), len(f.Sets()))
+	}
+	// Pending addresses can still be enabled, which keeps them.
+	out := decode[maskedEmailOut](t, call(t, cs, "enable_masked_email", map[string]any{"id": "m3"}))
+	if out.State != "enabled" {
+		t.Errorf("got %+v", out)
 	}
 }
