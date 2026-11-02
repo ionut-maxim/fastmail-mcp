@@ -24,7 +24,13 @@ func NewHTTPHandler(store Store, token string, log *slog.Logger) (http.Handler, 
 	}
 	srv := New(store, log)
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
-		&mcp.StreamableHTTPOptions{Stateless: true, Logger: log})
+		&mcp.StreamableHTTPOptions{
+			Stateless: true,
+			Logger:    log,
+			// A client that disconnects cancels its Fastmail call. The SDK
+			// applies this to clients on protocol 2026-07-28 or later.
+			PropagateRequestCancellation: true,
+		})
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", requireBearer(token, log, streamable))
