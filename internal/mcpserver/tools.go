@@ -8,8 +8,10 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/ionut-maxim/fastmail/maskedemail"
@@ -19,6 +21,11 @@ import (
 const (
 	defaultLimit = 50
 	maxLimit     = 500
+
+	maxDescription = 256
+	maxURL         = 2048
+	// maxEcho is how much of a rejected value an error message repeats.
+	maxEcho = 64
 )
 
 // listStates are the states list_masked_emails accepts. They are filters,
@@ -174,8 +181,8 @@ func matches(m maskedemail.MaskedEmail, query string) bool {
 
 type createIn struct {
 	ForDomain   string `json:"forDomain" jsonschema:"The site the address is for, such as example.com or https://example.com. Stored as the site's origin."`
-	Description string `json:"description" jsonschema:"Short note on what the address is for, such as Newsletter or Shop account"`
-	URL         string `json:"url,omitempty" jsonschema:"Optional link to keep with the address, such as the account page"`
+	Description string `json:"description" jsonschema:"Short note on what the address is for, such as Newsletter or Shop account. At most 256 characters."`
+	URL         string `json:"url,omitempty" jsonschema:"Optional http or https link to keep with the address, such as the account page"`
 	EmailPrefix string `json:"emailPrefix,omitempty" jsonschema:"Optional start of the generated address: up to 64 characters of a-z, 0-9 and underscore"`
 }
 
@@ -186,9 +193,16 @@ func (s *server) create(ctx context.Context, in createIn) (maskedEmailOut, error
 	if err != nil {
 		return maskedEmailOut{}, err
 	}
-	desc := strings.TrimSpace(in.Description)
+	desc, err := checkDescription(in.Description)
+	if err != nil {
+		return maskedEmailOut{}, err
+	}
 	if desc == "" {
 		return maskedEmailOut{}, errors.New("description is required")
+	}
+	link, err := checkURL(in.URL)
+	if err != nil {
+		return maskedEmailOut{}, err
 	}
 	prefix := strings.TrimSpace(in.EmailPrefix)
 	if prefix != "" && !prefixPattern.MatchString(prefix) {
@@ -198,7 +212,7 @@ func (s *server) create(ctx context.Context, in createIn) (maskedEmailOut, error
 		State:       maskedemail.StateEnabled,
 		ForDomain:   origin,
 		Description: desc,
-		URL:         strings.TrimSpace(in.URL),
+		URL:         link,
 		EmailPrefix: prefix,
 	})
 	if err != nil {
@@ -261,18 +275,26 @@ func (s *server) disable(ctx context.Context, in refIn) (maskedEmailOut, error) 
 
 type updateIn struct {
 	refIn
-	Description *string `json:"description,omitempty" jsonschema:"New description. An empty string clears it."`
-	URL         *string `json:"url,omitempty" jsonschema:"New link. An empty string clears it."`
+	Description *string `json:"description,omitempty" jsonschema:"New description, at most 256 characters. An empty string clears it."`
+	URL         *string `json:"url,omitempty" jsonschema:"New http or https link. An empty string clears it."`
 	ForDomain   *string `json:"forDomain,omitempty" jsonschema:"New site, such as example.com or https://example.com"`
 }
 
 func (s *server) update(ctx context.Context, in updateIn) (maskedEmailOut, error) {
 	var p maskedemail.UpdateParams
 	if in.Description != nil {
-		p.Description = new(strings.TrimSpace(*in.Description))
+		desc, err := checkDescription(*in.Description)
+		if err != nil {
+			return maskedEmailOut{}, err
+		}
+		p.Description = &desc
 	}
 	if in.URL != nil {
-		p.URL = new(strings.TrimSpace(*in.URL))
+		link, err := checkURL(*in.URL)
+		if err != nil {
+			return maskedEmailOut{}, err
+		}
+		p.URL = &link
 	}
 	if in.ForDomain != nil {
 		origin, err := siteOrigin(*in.ForDomain)
@@ -302,12 +324,16 @@ func siteOrigin(site string) (string, error) {
 	if site == "" {
 		return "", errors.New("forDomain is required: the site the address is for, such as example.com")
 	}
-	if !strings.Contains(site, "://") {
-		site = "https://" + site
+	if len(site) > maxURL {
+		return "", fmt.Errorf("forDomain is longer than %d characters", maxURL)
 	}
-	u, err := url.Parse(site)
-	if err != nil || u.Host == "" || u.User != nil || strings.ContainsAny(u.Host, " @") || (u.Scheme != "https" && u.Scheme != "http") {
-		return "", fmt.Errorf("forDomain %q is not a site such as example.com or https://example.com", strings.TrimSpace(site))
+	full := site
+	if !strings.Contains(full, "://") {
+		full = "https://" + full
+	}
+	u, err := parseWebURL(full)
+	if err != nil {
+		return "", fmt.Errorf("forDomain %q is not a site such as example.com or https://example.com", clip(site))
 	}
 	return u.Scheme + "://" + strings.ToLower(u.Host), nil
 }
@@ -319,4 +345,61 @@ func siteHost(site string) (string, error) {
 		return "", err
 	}
 	return origin[strings.Index(origin, "://")+3:], nil
+}
+
+// checkURL trims link and checks it is empty or an http(s) URL.
+func checkURL(link string) (string, error) {
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return "", nil
+	}
+	if len(link) > maxURL {
+		return "", fmt.Errorf("url is longer than %d characters", maxURL)
+	}
+	if _, err := parseWebURL(link); err != nil {
+		return "", fmt.Errorf("url %q is not an http or https link", clip(link))
+	}
+	return link, nil
+}
+
+// parseWebURL parses an absolute http or https URL with a host, an optional
+// valid port and no user info.
+func parseWebURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case u.Scheme != "http" && u.Scheme != "https":
+		return nil, errors.New("not http or https")
+	case u.User != nil:
+		return nil, errors.New("user info")
+	case u.Hostname() == "" || strings.ContainsAny(u.Hostname(), " @"):
+		return nil, errors.New("no host")
+	case strings.HasSuffix(u.Host, ":"):
+		return nil, errors.New("empty port")
+	}
+	if p := u.Port(); p != "" {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return nil, errors.New("bad port")
+		}
+	}
+	return u, nil
+}
+
+// checkDescription trims desc and checks its length.
+func checkDescription(desc string) (string, error) {
+	desc = strings.TrimSpace(desc)
+	if utf8.RuneCountInString(desc) > maxDescription {
+		return "", fmt.Errorf("description is longer than %d characters", maxDescription)
+	}
+	return desc, nil
+}
+
+// clip shortens a rejected value before an error message repeats it.
+func clip(s string) string {
+	if utf8.RuneCountInString(s) <= maxEcho {
+		return s
+	}
+	return string([]rune(s)[:maxEcho]) + "…"
 }

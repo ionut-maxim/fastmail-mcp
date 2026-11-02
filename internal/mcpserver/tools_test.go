@@ -388,6 +388,13 @@ func TestSiteOrigin(t *testing.T) {
 		"mailto:someone@example.com":        "",
 		"not a site":                        "",
 		"javascript://example.com/%0Aalert": "",
+		"https://:80":                       "",
+		"example.com:99999":                 "",
+		"example.com:0":                     "",
+		"example.com:":                      "",
+		"example.com:http":                  "",
+		"example.com:8443":                  "https://example.com:8443",
+		"https://[::1]:8080/x":              "https://[::1]:8080",
 	} {
 		got, err := siteOrigin(in)
 		if want == "" {
@@ -399,5 +406,46 @@ func TestSiteOrigin(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("siteOrigin(%q) = %q, %v; want %q", in, got, err, want)
 		}
+	}
+}
+
+func TestCheckURL(t *testing.T) {
+	for in, ok := range map[string]bool{
+		"":                                     true,
+		"  ":                                   true,
+		"https://example.com/account?id=1":     true,
+		"http://example.com":                   true,
+		"example.com/account":                  false,
+		"javascript:alert(1)":                  false,
+		"ftp://example.com/file":               false,
+		"https://user:pw@example.com":          false,
+		"https://example.com:99999/":           false,
+		"https://" + strings.Repeat("a", 2049): false,
+	} {
+		if _, err := checkURL(in); (err == nil) != ok {
+			t.Errorf("checkURL(%.40q): err %v, want ok=%v", in, err, ok)
+		}
+	}
+}
+
+func TestValidationLimits(t *testing.T) {
+	f := seeded(t)
+	cs := connect(t, newClient(t, f).MaskedEmail)
+	long := strings.Repeat("x", 300)
+	wantToolError(t, cs, "create_masked_email", map[string]any{"forDomain": "example.com", "description": long}, "longer than 256")
+	wantToolError(t, cs, "create_masked_email", map[string]any{"forDomain": "example.com", "description": "x", "url": "javascript:alert(1)"}, "not an http or https link")
+	wantToolError(t, cs, "create_masked_email", map[string]any{"forDomain": "example.com" + strings.Repeat("a", 2048), "description": "x"}, "longer than 2048")
+	wantToolError(t, cs, "update_masked_email", map[string]any{"id": "m1", "description": long}, "longer than 256")
+	wantToolError(t, cs, "update_masked_email", map[string]any{"id": "m1", "url": "ftp://example.com"}, "not an http or https link")
+	decode[maskedEmailOut](t, call(t, cs, "create_masked_email", map[string]any{"forDomain": "example.com", "description": strings.Repeat("é", 256)}))
+
+	// A rejected value is echoed only in part.
+	bad := "not a site " + strings.Repeat("y", 500)
+	res := call(t, cs, "create_masked_email", map[string]any{"forDomain": bad, "description": "x"})
+	if !res.IsError || strings.Contains(text(res), bad[:100]) || !strings.Contains(text(res), bad[:64]) {
+		t.Errorf("error %q", text(res))
+	}
+	if n := len(f.Sets()); n != 1 {
+		t.Errorf("%d creates reached Fastmail, want only the valid one", n)
 	}
 }
