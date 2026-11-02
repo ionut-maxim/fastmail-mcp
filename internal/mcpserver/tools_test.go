@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -463,4 +464,52 @@ func TestDeletedAddressesStayDeleted(t *testing.T) {
 	if out.State != "enabled" {
 		t.Errorf("got %+v", out)
 	}
+}
+
+// failingStore fails every call with err.
+type failingStore struct {
+	Store
+	err error
+}
+
+func (f failingStore) List(context.Context, *maskedemail.ListOptions) ([]maskedemail.MaskedEmail, error) {
+	return nil, f.err
+}
+
+func TestUnknownFastmailErrorsAreGeneric(t *testing.T) {
+	var logs strings.Builder
+	log := slog.New(slog.NewJSONHandler(&logs, nil))
+	detail := &jmap.MethodError{Method: "MaskedEmail/get", Type: "serverFail", Description: "internal detail 42"}
+	serverT, clientT := mcp.NewInMemoryTransports()
+	if _, err := New(failingStore{err: detail}, log).Connect(t.Context(), serverT, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(t.Context(), clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	res := call(t, cs, "list_masked_emails", map[string]any{"query": "private-query"})
+	if !res.IsError || text(res) != errFastmail.Error() {
+		t.Errorf("client got %q, want %q", text(res), errFastmail)
+	}
+	if !strings.Contains(logs.String(), "internal detail 42") || !strings.Contains(logs.String(), `"tool":"list_masked_emails"`) || !strings.Contains(logs.String(), `"level":"WARN"`) {
+		t.Errorf("detail not logged at warn: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "private-query") {
+		t.Errorf("tool arguments logged: %s", logs.String())
+	}
+
+	// Known errors keep their specific message.
+	serverT, clientT = mcp.NewInMemoryTransports()
+	if _, err := New(failingStore{err: jmap.ErrUnsupportedCapability}, nil).Connect(t.Context(), serverT, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs2, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(t.Context(), clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs2.Close()
+	wantToolError(t, cs2, "list_masked_emails", nil, "Masked Email scope")
 }

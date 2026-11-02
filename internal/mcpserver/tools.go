@@ -39,7 +39,7 @@ func (s *server) addTools(srv *mcp.Server) {
 	}
 	listSchema.Properties["states"].Items.Enum = listStates
 
-	addTool(srv, &mcp.Tool{
+	addTool(s, srv, &mcp.Tool{
 		Name:  "list_masked_emails",
 		Title: "List masked emails",
 		Description: "List Fastmail masked email addresses, newest first. By default only enabled and disabled addresses are returned. " +
@@ -48,21 +48,21 @@ func (s *server) addTools(srv *mcp.Server) {
 		Annotations: readOnly,
 		InputSchema: listSchema,
 	}, s.list)
-	addTool(srv, &mcp.Tool{
+	addTool(s, srv, &mcp.Tool{
 		Name:  "create_masked_email",
 		Title: "Create masked email",
 		Description: "Create a new masked email address for a site and return it. The address is created enabled, so it keeps working. " +
 			"Check list_masked_emails first if the site may already have one. Fastmail limits how many addresses can be created in a short time.",
 		Annotations: additive,
 	}, s.create)
-	addTool(srv, &mcp.Tool{
+	addTool(s, srv, &mcp.Tool{
 		Name:  "enable_masked_email",
 		Title: "Enable masked email",
 		Description: "Enable a masked email address, by id or by address, so its mail is delivered to the inbox again. " +
 			"Addresses in the deleted state are refused: restoring one is only possible in the Fastmail app.",
 		Annotations: reversible,
 	}, s.enable)
-	addTool(srv, &mcp.Tool{
+	addTool(s, srv, &mcp.Tool{
 		Name:  "disable_masked_email",
 		Title: "Disable masked email",
 		Description: "Disable a masked email address, by id or by address. Mail sent to it then goes straight to the trash. " +
@@ -70,7 +70,7 @@ func (s *server) addTools(srv *mcp.Server) {
 			"Addresses in the deleted state are refused and stay deleted.",
 		Annotations: reversible,
 	}, s.disable)
-	addTool(srv, &mcp.Tool{
+	addTool(s, srv, &mcp.Tool{
 		Name:  "update_masked_email",
 		Title: "Update masked email",
 		Description: "Change the description, url or site (forDomain) of a masked email address, by id or by address. " +
