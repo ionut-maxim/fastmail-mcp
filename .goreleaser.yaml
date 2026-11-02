@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# Runs from the release workflow once release-please has tagged vX.Y.Z and
+# published the GitHub release. It attaches binaries to that release (its
+# changelog stays as release-please wrote it) and pushes the image.
+# Dry run locally with: mise run release:snapshot
+version: 2
+
+project_name: fastmail-mcp
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: fastmail-mcp
+    main: ./cmd/fastmail-mcp
+    binary: fastmail-mcp
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/ionut-maxim/fastmail-mcp/internal/mcpserver.Version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+# release-please writes the changelog and creates the release.
+changelog:
+  disable: true
+
+release:
+  mode: keep-existing
+  replace_existing_artifacts: true
+
+dockers_v2:
+  - images:
+      - ghcr.io/ionut-maxim/fastmail-mcp
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .IsSnapshot }}latest{{ end }}"
+    platforms: [linux/amd64, linux/arm64]
+    labels: &oci
+      org.opencontainers.image.title: fastmail-mcp
+      org.opencontainers.image.description: MCP server for Fastmail Masked Email
+      org.opencontainers.image.source: https://github.com/ionut-maxim/fastmail-mcp
+      org.opencontainers.image.url: https://github.com/ionut-maxim/fastmail-mcp
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
+      org.opencontainers.image.licenses: MIT
+    annotations: *oci
