@@ -14,8 +14,8 @@ and the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 |---|---|
 | `list_masked_emails` | Lists addresses, newest first. Filters: `states` (`enabled`, `disabled`, `pending`, `deleted`; default enabled and disabled), `domain` (a site, matches its subdomains too), `query` (text in the description, address or site) and `limit` (default 50, at most 500). Read-only. |
 | `create_masked_email` | Creates an address for a site: `forDomain` and `description` are required, `url` and `emailPrefix` optional. Always created **enabled** (a `pending` address is removed by Fastmail after 24 hours). Returns the new address. |
-| `enable_masked_email` | Enables an address, by `id` or `email`. |
-| `disable_masked_email` | Disables an address, by `id` or `email`: its mail goes to the trash. Undo with `enable_masked_email`. |
+| `enable_masked_email` | Enables an address, by `id` or `email`. Refuses addresses in the `deleted` state. |
+| `disable_masked_email` | Disables an address, by `id` or `email`: its mail goes to the trash. Undo with `enable_masked_email`. Refuses addresses in the `deleted` state. |
 | `update_masked_email` | Changes `description`, `url` or `forDomain`, by `id` or `email`. |
 
 Every tool returns compact records: `id`, `email`, `state`, `forDomain`,
@@ -23,6 +23,9 @@ Every tool returns compact records: `id`, `email`, `state`, `forDomain`,
 
 `forDomain` takes `example.com`, `https://example.com` or a full URL and is
 stored as the site's origin (`https://example.com`), the form Fastmail uses.
+It must be http or https with a host and, if given, a valid port. `url` must
+be an http or https link. `description` is at most 256 characters; `url` and
+`forDomain` at most 2048.
 
 ## Install
 
@@ -65,9 +68,18 @@ Over HTTP:
 - The server is stateless, so it can run behind a load balancer with any
   number of replicas.
 - It shuts down gracefully on `SIGTERM`.
+- If a client disconnects mid-call, its Fastmail request is cancelled
+  (for clients on MCP protocol 2026-07-28 or later).
+- The MCP SDK's DNS-rebinding protection is on: a request that arrives on a
+  loopback address (`127.0.0.1`, `::1`) with a non-localhost `Host` header is
+  refused with `403`. Reach the server through a Kubernetes Service or an
+  ingress, not through a sidecar proxy that forwards to `127.0.0.1` with the
+  public `Host`.
 
 Logs are JSON on stderr. Each tool call is logged with its name, whether it
 failed and how long it took; arguments, results and tokens are never logged.
+Fastmail errors without a specific meaning reach the client as a generic
+"Fastmail request failed" and are logged at warn level with the detail.
 
 ## Claude Code
 
@@ -105,7 +117,8 @@ Or in a project's `.mcp.json`, reading the token from your environment:
 
 - **No delete.** There is no delete tool and no tool can set an address to
   `deleted` (or back to `pending`): `disable_masked_email` is the way to stop
-  an address, and it can be undone. Deleting has to be done in Fastmail. The
+  an address, and it can be undone. Addresses already `deleted` are left
+  alone: enable and disable refuse them. Deleting has to be done in Fastmail. The
   code enforces this twice: the server's store interface has no `Delete`, and
   every update goes through a guard that only lets `enabled` and `disabled`
   through.
