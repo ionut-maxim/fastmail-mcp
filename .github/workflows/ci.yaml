@@ -23,7 +23,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: jdx/mise-action@v5.2.4
+        env:
+          MISE_LOCKED: "1" # install only what mise.lock records, checksums included
         with:
+          # renovate: datasource=github-releases depName=jdx/mise
+          version: 2026.11.8 # reads mise.lock's format (older mise can't)
           install_args: go goreleaser
       - name: Format, vet and test
         run: |
